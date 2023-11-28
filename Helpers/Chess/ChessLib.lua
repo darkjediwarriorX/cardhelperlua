@@ -28,6 +28,7 @@ function BOARD.new(player1: Player, player2: Player, board: Model)
     self.GridHistory = {};
     self.Grid = self:Setup();
 
+    self.TurnIndex = 0;
     self.Turn = "White";
     self.Pieces = {};
 
@@ -39,6 +40,7 @@ function BOARD.new(player1: Player, player2: Player, board: Model)
                     self.Turn = self.Turn == "White" and "Black" or "White";
                     local gameOver, winner, outcome = self:GetOutcome();
 
+                    self.TurnIndex += 1;
                     self:UpdateBoard();
 
                     if gameOver then
@@ -134,7 +136,7 @@ function BOARD:Setup()
     return grid;
 end;
 
-function BOARD:Push(pieceFrom: {[number]: number}, pieceTo: {[number]: number})
+function BOARD:Push(pieceFrom: {[number]: number}, pieceTo: {[number]: number}, passant: {[number]: number})
     for x, data in self.Grid do
         self.GridHistory[x] = data;
     end
@@ -142,6 +144,14 @@ function BOARD:Push(pieceFrom: {[number]: number}, pieceTo: {[number]: number})
     local piece = self.Grid[pieceFrom[1]][pieceFrom[2]];
     self.Grid[pieceFrom[1]][pieceFrom[2]] = nil;
     self.Grid[pieceTo[1]][pieceTo[2]] = piece;
+
+    if passant then
+        self.Grid[passant[1]][passant[2]] = nil;
+    end
+
+    if not piece.FirstTurn then
+        piece.FirstTurn = self.TurnIndex;
+    end
 end
 
 function BOARD:Pop()
@@ -178,14 +188,26 @@ function BOARD:IsPathBlocked(pieceFrom: {[number]: number}, pieceTo: {[number]: 
     return isBlocked;
 end
 
-function BOARD:GetAttackMovement(coordinate: {[number]: number}, movement: {[number]: {[number]: number}}, forward: number, isKnight: boolean)
+function BOARD:GetAttackMovement(coordinate: {[number]: number}, movement: {[number]: {[number]: number}}, forward: number, pieceType: string)
     local side = forward == 1 and "White" or "Black";
     local attackMovement = {};
     local fromPos = Vector2.new(coordinate.X, coordinate.Y);
 
     for _, move in movement do
         local toPos = fromPos + (move * Vector2.new(0, forward));
-        if (not self:IsPathBlocked(coordinate, toPos, side) or isKnight) then
+        if pieceType == "Pawn" then
+            local piece = self:GetPieceByCoords(toPos);
+            if piece and piece.Side ~= side then
+                table.insert(attackMovement, {X = toPos.X, Y = toPos.Y});
+            elseif not piece and coordinate.Y == (side == "White" and 5 or 4) then
+                -- en passant
+                local passant = self:GetPieceByCoords(toPos + (Vector2.new(0, -forward)));
+                if passant and passant.Side ~= side and passant.Type == "Pawn" and passant.FirstTurn == (self.TurnIndex - 1) then
+                    table.insert(attackMovement, {X = toPos.X, Y = toPos.Y});
+                end
+            end
+        else
+            if (not self:IsPathBlocked(coordinate, toPos, side) or pieceType == "Knight") then
             table.insert(attackMovement, {X = toPos.X, Y = toPos.Y});
         end
     end
@@ -193,13 +215,13 @@ function BOARD:GetAttackMovement(coordinate: {[number]: number}, movement: {[num
     return attackMovement;
 end
 
-function BOARD:GetAvailableMovement(coordinate: Vector2, movement: {[number]: {[number]: number}}, forward: number, isKnight: boolean)
+function BOARD:GetAvailableMovement(coordinate: Vector2, movement: {[number]: {[number]: number}}, forward: number, pieceType: boolean)
     local movement = {};
     local side = forward == 1 and "White" or "Black";
 
     for _, move in movement do
         local toPos = coordinate + (move * Vector2.new(0, forward));
-        if not self:IsPathBlocked(coordinate, toPos, side) then
+        if not self:IsPathBlocked(coordinate, toPos, side) or pieceType == "Knight" then
             table.insert(movement, {X = toPos.X, Y = toPos.Y});
         end
     end
@@ -213,7 +235,7 @@ function BOARD:CreateAttackGrid(side: string)
     for x=1, 8 do
         for y=1, 8 do
             if self.Grid[x][y] and self.Grid[x][y].Side == side then
-                for _, coordinate in self:GetAttackMovement({x, y}, self.Grid[x][y].AttackMask, side == "White" and 1 or -1, self.Grid[x][y].Type == "Knight") do
+                for _, coordinate in self:GetAttackMovement({x, y}, self.Grid[x][y].AttackMask, side == "White" and 1 or -1, self.Grid[x][y].Type) do
                     grid[coordinate.X] = grid[coordinate.X] or {};
                     grid[coordinate.X][coordinate.Y] = true;
                 end
@@ -229,6 +251,21 @@ end
 git config --global user.email "you@example.com"
   git config --global user.name "Your Name"
 ]]
+
+function BOARD:IsMovementValid(pos: {[number]: number}, movements, attacks)
+    for _, move in movements do
+        if move.X == pos.X and move.Y == pos.Y then
+            return true;
+        end
+    end
+    for _, move in attacks do
+        if move.X == pos.X and move.Y == pos.Y then
+            return true;
+        end
+    end
+
+    return false;
+end
 
 function BOARD:GetPieceByType(side: string, type: string)
     for x, yInfo in self.Grid do
@@ -253,8 +290,26 @@ function BOARD:InCheck(side: string)
     return attacks[pos.X] and attacks[pos.Y];
 end
 
+function BOARD:GetEnPassant(pieceFrom, pieceTo, side: string)
+    if pieceFrom.Y ~= (side == "White" and 5 or 4) or (pieceTo.Y ~= (side == "White" and 6 or 3)) then return end
+    pieceTo = Vector2.new(pieceTo.X, pieceTo.Y)
+    local pieceFrom, pieceTo, piecePassant = self:GetPieceByCoords(pieceFrom), self:GetPieceByCoords(pieceTo), self:GetPieceByCoords(pieceTo + Vector2.new(0, side == "White" and -1 or 1);
+
+    if not pieceFrom or pieceFrom.Type ~= "Pawn" or pieceTo or not piecePassant or piecePassant.Type ~= "Pawn" or piecePassant.FirstTurn ~= (self.TurnIndex - 1) then
+        return
+    end
+
+    return pieceTo + Vector2.new(0, side == "White" and -1 or 1);
+end
+
 function BOARD:AttemptMove(pieceFrom, pieceTo, side: string)
-    self:Push(pieceFrom, pieceTo);
+    local piece = self:GetPieceByCoords(pieceFrom);
+    if not piece or piece.Side ~= side then return end
+    
+    local validMove = self:IsMovementValid(pieceTo, self:GetAvailableMovement(pieceFrom, piece.MovementMask, side == "White" and 1 or -1, piece.Type),
+    self:GetAttackMovement(pieceFrom, piece.AttackMask, side == "White" and 1 or -1, piece.Type);
+
+    self:Push(pieceFrom, pieceTo, self:GetEnPassant(pieceFrom, pieceTo, side));
     if self:InCheck(side) then
         self:Pop();
         return false;
